@@ -26,10 +26,10 @@
  *   Marc Fournier <marc.fournier at camptocamp.com>
  **/
 
-#include "common.h"
-#include "plugin.h"
-#include "utils_time.h"
 #include "collectd.h"
+#include "plugin.h"
+#include "utils/common/common.h"
+#include "utils_time.h"
 
 #define CGPS_TRUE 1
 #define CGPS_FALSE 0
@@ -80,7 +80,7 @@ static int cgps_thread_pause(cdtime_t pTime) {
 
   int ret = !cgps_thread_shutdown;
 
-  pthread_mutex_lock(&cgps_thread_lock);
+  pthread_mutex_unlock(&cgps_thread_lock);
   return ret;
 }
 
@@ -141,7 +141,12 @@ static void *cgps_thread(void *pData) {
         continue;
       }
 
-      if (gps_read(&gpsd_conn) == -1) {
+#if GPSD_API_MAJOR_VERSION > 6
+      if (gps_read(&gpsd_conn, NULL, 0) == -1)
+#else
+      if (gps_read(&gpsd_conn) == -1)
+#endif
+      {
         WARNING("gps plugin: incorrect data! (err_count: %d)", err_count);
         err_count++;
 
@@ -307,7 +312,6 @@ static int cgps_shutdown(void) {
   free(res);
 
   // Clean mutex:
-  pthread_mutex_unlock(&cgps_thread_lock);
   pthread_mutex_destroy(&cgps_thread_lock);
   pthread_mutex_unlock(&cgps_data_lock);
   pthread_mutex_destroy(&cgps_data_lock);

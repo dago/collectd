@@ -10,10 +10,10 @@ if test $# -lt 1; then
 fi
 
 for i in "$@"; do
-  d="$(dirname "${i}")"
-  o="$(tempfile -d "${d}" -m 0644)"
+  d="`dirname "${i}"`"
+  o="`TMPDIR="${d}" mktemp format.XXXXXX`"
 
-  curl --silent --data-binary "@-" https://clang-format.appspot.com/ <"${i}" >"${o}"
+  curl --silent --data-binary "@-" https://format.collectd.org/ <"${i}" >"${o}"
   if test $? -eq 0; then
     cat "${o}" >"${i}"
   fi

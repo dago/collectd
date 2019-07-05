@@ -21,8 +21,8 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
 #if KERNEL_LINUX
 #include <sys/sysinfo.h>
@@ -52,6 +52,10 @@
 /*
  * Global variables
  */
+
+#if HAVE_KSTAT_H
+#include <kstat.h>
+#endif
 
 #if HAVE_LIBKSTAT
 extern kstat_ctl_t *kc;
@@ -87,9 +91,7 @@ static time_t uptime_get_sys(void) { /* {{{ */
 
   status = sysinfo(&info);
   if (status != 0) {
-    char errbuf[1024];
-    ERROR("uptime plugin: Error calling sysinfo: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("uptime plugin: Error calling sysinfo: %s", STRERRNO);
     return -1;
   }
 
@@ -148,9 +150,7 @@ static time_t uptime_get_sys(void) { /* {{{ */
   status = sysctl(mib, STATIC_ARRAY_SIZE(mib), &boottv, &boottv_len,
                   /* new_value = */ NULL, /* new_length = */ 0);
   if (status != 0) {
-    char errbuf[1024];
-    ERROR("uptime plugin: No value read from sysctl interface: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("uptime plugin: No value read from sysctl interface: %s", STRERRNO);
     return -1;
   }
 
@@ -170,9 +170,7 @@ static time_t uptime_get_sys(void) { /* {{{ */
 
   status = perfstat_cpu_total(NULL, &cputotal, sizeof(perfstat_cpu_total_t), 1);
   if (status < 0) {
-    char errbuf[1024];
-    ERROR("uptime plugin: perfstat_cpu_total: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("uptime plugin: perfstat_cpu_total: %s", STRERRNO);
     return -1;
   }
 

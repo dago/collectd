@@ -28,11 +28,11 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
-#include "utils_cmd_putnotif.h"
-#include "utils_cmd_putval.h"
+#include "utils/cmds/putnotif.h"
+#include "utils/cmds/putval.h"
 
 #include <grp.h>
 #include <pwd.h>
@@ -78,9 +78,14 @@ typedef struct program_list_and_notification_s {
 } program_list_and_notification_t;
 
 /*
+ * constants
+ */
+const long int MAX_GRBUF_SIZE = 65536;
+
+/*
  * Private variables
  */
-static program_list_t *pl_head = NULL;
+static program_list_t *pl_head;
 static pthread_mutex_t pl_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
@@ -240,11 +245,17 @@ static int exec_config(oconfig_item_t *ci) /* {{{ */
   return 0;
 } /* int exec_config }}} */
 
+#if !defined(HAVE_SETENV)
+static char env_interval[64];
+// max hostname len is 255, so this should be enough
+static char env_hostname[300];
+#endif
+
 static void set_environment(void) /* {{{ */
 {
+#ifdef HAVE_SETENV
   char buffer[1024];
 
-#ifdef HAVE_SETENV
   snprintf(buffer, sizeof(buffer), "%.3f",
            CDTIME_T_TO_DOUBLE(plugin_get_interval()));
   setenv("COLLECTD_INTERVAL", buffer, /* overwrite = */ 1);
@@ -252,20 +263,33 @@ static void set_environment(void) /* {{{ */
   sstrncpy(buffer, hostname_g, sizeof(buffer));
   setenv("COLLECTD_HOSTNAME", buffer, /* overwrite = */ 1);
 #else
-  snprintf(buffer, sizeof(buffer), "COLLECTD_INTERVAL=%.3f",
+  snprintf(env_interval, sizeof(env_interval), "COLLECTD_INTERVAL=%.3f",
            CDTIME_T_TO_DOUBLE(plugin_get_interval()));
-  putenv(buffer);
+  putenv(env_interval);
 
-  snprintf(buffer, sizeof(buffer), "COLLECTD_HOSTNAME=%s", hostname_g);
-  putenv(buffer);
+  snprintf(env_hostname, sizeof(env_hostname), "COLLECTD_HOSTNAME=%s",
+           hostname_g);
+  putenv(env_hostname);
 #endif
 } /* }}} void set_environment */
+
+static void unset_environment(void) /* {{{ */
+{
+#ifdef HAVE_SETENV
+  unsetenv("COLLECTD_INTERVAL");
+  unsetenv("COLLECTD_HOSTNAME");
+#else
+  snprintf(env_interval, sizeof(env_interval), "COLLECTD_INTERVAL");
+  putenv(env_interval);
+  snprintf(env_hostname, sizeof(env_hostname), "COLLECTD_HOSTNAME");
+  putenv(env_hostname);
+#endif
+} /* }}} void unset_environment */
 
 __attribute__((noreturn)) static void exec_child(program_list_t *pl, int uid,
                                                  int gid, int egid) /* {{{ */
 {
   int status;
-  char errbuf[1024];
 
 #if HAVE_SETGROUPS
   if (getuid() == 0) {
@@ -286,31 +310,27 @@ __attribute__((noreturn)) static void exec_child(program_list_t *pl, int uid,
 
   status = setgid(gid);
   if (status != 0) {
-    ERROR("exec plugin: setgid (%i) failed: %s", gid,
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: setgid (%i) failed: %s", gid, STRERRNO);
     exit(-1);
   }
 
   if (egid != -1) {
     status = setegid(egid);
     if (status != 0) {
-      ERROR("exec plugin: setegid (%i) failed: %s", egid,
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("exec plugin: setegid (%i) failed: %s", egid, STRERRNO);
       exit(-1);
     }
   }
 
   status = setuid(uid);
   if (status != 0) {
-    ERROR("exec plugin: setuid (%i) failed: %s", uid,
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: setuid (%i) failed: %s", uid, STRERRNO);
     exit(-1);
   }
 
   execvp(pl->exec, pl->argv);
 
-  ERROR("exec plugin: Failed to execute ``%s'': %s", pl->exec,
-        sstrerror(errno, errbuf, sizeof(errbuf)));
+  ERROR("exec plugin: Failed to execute ``%s'': %s", pl->exec, STRERRNO);
   exit(-1);
 } /* void exec_child }}} */
 
@@ -324,13 +344,11 @@ static void reset_signal_mask(void) /* {{{ */
 
 static int create_pipe(int fd_pipe[2]) /* {{{ */
 {
-  char errbuf[1024];
   int status;
 
   status = pipe(fd_pipe);
   if (status != 0) {
-    ERROR("exec plugin: pipe failed: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: pipe failed: %s", STRERRNO);
     return -1;
   }
 
@@ -347,6 +365,65 @@ static void close_pipe(int fd_pipe[2]) /* {{{ */
 } /* }}} void close_pipe */
 
 /*
+ * Get effective group ID from group name.
+ * Input arguments:
+ *       pl  :program list struct with group name
+ *       gid :group id to fallback in case egid cannot be determined.
+ * Returns:
+ *       egid effective group id if successfull,
+ *            -1 if group is not defined/not found.
+ *            -2 for any buffer allocation error.
+ */
+static int getegr_id(program_list_t *pl, int gid) /* {{{ */
+{
+  if (pl->group == NULL) {
+    return -1;
+  }
+  if (strcmp(pl->group, "") == 0) {
+    return gid;
+  }
+  struct group *gr_ptr = NULL;
+  struct group gr;
+
+  long int grbuf_size = sysconf(_SC_GETGR_R_SIZE_MAX);
+  if (grbuf_size <= 0)
+    grbuf_size = sysconf(_SC_PAGESIZE);
+  if (grbuf_size <= 0)
+    grbuf_size = 4096;
+
+  char *temp = NULL;
+  char *grbuf = NULL;
+
+  do {
+    temp = realloc(grbuf, grbuf_size);
+    if (temp == NULL) {
+      ERROR("exec plugin: getegr_id for %s: realloc buffer[%ld] failed ",
+            pl->group, grbuf_size);
+      sfree(grbuf);
+      return -2;
+    }
+    grbuf = temp;
+    if (getgrnam_r(pl->group, &gr, grbuf, grbuf_size, &gr_ptr) == 0) {
+      sfree(grbuf);
+      if (gr_ptr == NULL) {
+        ERROR("exec plugin: No such group: `%s'", pl->group);
+        return -1;
+      }
+      return gr.gr_gid;
+    } else if (errno == ERANGE) {
+      grbuf_size += grbuf_size; // increment buffer size and try again
+    } else {
+      ERROR("exec plugin: getegr_id failed %s", STRERRNO);
+      sfree(grbuf);
+      return -2;
+    }
+  } while (grbuf_size <= MAX_GRBUF_SIZE);
+  ERROR("exec plugin: getegr_id Max grbuf size reached  for %s", pl->group);
+  sfree(grbuf);
+  return -2;
+}
+
+/*
  * Creates three pipes (one for reading, one for writing and one for errors),
  * forks a child, sets up the pipes so that fd_in is connected to STDIN of
  * the child and fd_out is connected to STDOUT and fd_err is connected to STDERR
@@ -358,7 +435,6 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
   int fd_pipe_in[2] = {-1, -1};
   int fd_pipe_out[2] = {-1, -1};
   int fd_pipe_err[2] = {-1, -1};
-  char errbuf[1024];
   int status;
   int pid;
 
@@ -387,7 +463,7 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
   status = getpwnam_r(pl->user, &sp, nambuf, sizeof(nambuf), &sp_ptr);
   if (status != 0) {
     ERROR("exec plugin: Failed to get user information for user ``%s'': %s",
-          pl->user, sstrerror(status, errbuf, sizeof(errbuf)));
+          pl->user, STRERROR(status));
     goto failed;
   }
 
@@ -405,41 +481,16 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
 
   /* The group configured in the configfile is set as effective group, because
    * this way the forked process can (re-)gain the user's primary group. */
-  egid = -1;
-  if (pl->group != NULL) {
-    if (*pl->group != '\0') {
-      struct group *gr_ptr = NULL;
-      struct group gr;
+  egid = getegr_id(pl, gid);
+  if (egid == -2) {
+    goto failed;
+  }
 
-      long int grbuf_size = sysconf(_SC_GETGR_R_SIZE_MAX);
-      if (grbuf_size <= 0)
-        grbuf_size = sysconf(_SC_PAGESIZE);
-      if (grbuf_size <= 0)
-        grbuf_size = 4096;
-      char grbuf[grbuf_size];
-
-      status = getgrnam_r(pl->group, &gr, grbuf, sizeof(grbuf), &gr_ptr);
-      if (status != 0) {
-        ERROR("exec plugin: Failed to get group information "
-              "for group ``%s'': %s",
-              pl->group, sstrerror(status, errbuf, sizeof(errbuf)));
-        goto failed;
-      }
-      if (gr_ptr == NULL) {
-        ERROR("exec plugin: No such group: `%s'", pl->group);
-        goto failed;
-      }
-
-      egid = gr.gr_gid;
-    } else {
-      egid = gid;
-    }
-  } /* if (pl->group == NULL) */
+  set_environment();
 
   pid = fork();
   if (pid < 0) {
-    ERROR("exec plugin: fork failed: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: fork failed: %s", STRERRNO);
     goto failed;
   } else if (pid == 0) {
     int fd_num;
@@ -471,14 +522,14 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
       close(fd_pipe_err[1]);
     }
 
-    set_environment();
-
     /* Unblock all signals */
     reset_signal_mask();
 
     exec_child(pl, uid, gid, egid);
     /* does not return */
   }
+
+  unset_environment();
 
   close(fd_pipe_in[0]);
   close(fd_pipe_out[1]);
@@ -502,6 +553,8 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
   return pid;
 
 failed:
+  unset_environment();
+
   close_pipe(fd_pipe_in);
   close_pipe(fd_pipe_out);
   close_pipe(fd_pipe_err);
@@ -688,9 +741,7 @@ static void *exec_notification_one(void *arg) /* {{{ */
 
   fh = fdopen(fd, "w");
   if (fh == NULL) {
-    char errbuf[1024];
-    ERROR("exec plugin: fdopen (%i) failed: %s", fd,
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: fdopen (%i) failed: %s", fd, STRERRNO);
     kill(pid, SIGTERM);
     close(fd);
     sfree(arg);
@@ -799,7 +850,11 @@ static int exec_read(void) /* {{{ */
 
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    plugin_thread_create(&t, &attr, exec_read_one, (void *)pl, "exec read");
+    int status =
+        plugin_thread_create(&t, &attr, exec_read_one, (void *)pl, "exec read");
+    if (status != 0) {
+      ERROR("exec plugin: plugin_thread_create failed.");
+    }
     pthread_attr_destroy(&attr);
   } /* for (pl) */
 
@@ -838,8 +893,11 @@ static int exec_notification(const notification_t *n, /* {{{ */
 
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    plugin_thread_create(&t, &attr, exec_notification_one, (void *)pln,
-                         "exec notify");
+    int status = plugin_thread_create(&t, &attr, exec_notification_one,
+                                      (void *)pln, "exec notify");
+    if (status != 0) {
+      ERROR("exec plugin: plugin_thread_create failed.");
+    }
     pthread_attr_destroy(&attr);
   } /* for (pl) */
 

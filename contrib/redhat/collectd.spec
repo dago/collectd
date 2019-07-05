@@ -38,9 +38,13 @@
 %global _hardened_build 1
 %{?perl_default_filter}
 
+# disable collectd debug by default
+%bcond_with debug
+
 # plugins enabled by default
 %define with_aggregation 0%{!?_without_aggregation:1}
 %define with_amqp 0%{!?_without_amqp:1}
+%define with_amqp1 0%{!?_without_amqp1:1}
 %define with_apache 0%{!?_without_apache:1}
 %define with_apcups 0%{!?_without_apcups:1}
 %define with_ascent 0%{!?_without_ascent:1}
@@ -112,6 +116,7 @@
 %define with_openvpn 0%{!?_without_openvpn:1}
 %define with_ovs_events 0%{!?_without_ovs_events:1}
 %define with_ovs_stats 0%{!?_without_ovs_stats:1}
+%define with_pcie_errors 0%{!?_without_pcie_errors:1}
 %define with_perl 0%{!?_without_perl:1}
 %define with_pinba 0%{!?_without_pinba:1}
 %define with_ping 0%{!?_without_ping:1}
@@ -130,6 +135,7 @@
 %define with_snmp_agent 0%{!?_without_snmp_agent:1}
 %define with_statsd 0%{!?_without_statsd:1}
 %define with_swap 0%{!?_without_swap:1}
+%define with_synproxy 0%{!?_without_synproxy:0}
 %define with_syslog 0%{!?_without_syslog:1}
 %define with_table 0%{!?_without_table:1}
 %define with_tail 0%{!?_without_tail:1}
@@ -155,7 +161,9 @@
 %define with_write_prometheus 0%{!?_without_write_prometheus:1}
 %define with_write_redis 0%{!?_without_write_redis:1}
 %define with_write_riemann 0%{!?_without_write_riemann:1}
+%define with_write_stackdriver 0%{!?_without_write_stackdriver:1}
 %define with_write_sensu 0%{!?_without_write_sensu:1}
+%define with_write_syslog 0%{!?_without_write_syslog:1}
 %define with_write_tsdb 0%{!?_without_write_tsdb:1}
 %define with_xmms 0%{!?_without_xmms:0%{?_has_xmms}}
 %define with_zfs_arc 0%{!?_without_zfs_arc:1}
@@ -208,6 +216,12 @@
 %define with_xencpu 0%{!?_without_xencpu:0}
 # plugin zone disabled, requires Solaris
 %define with_zone 0%{!?_without_zone:0}
+# plugin gpu_nvidia requires cuda-nvml-dev
+# get it from https://developer.nvidia.com/cuda-downloads
+# then install cuda-nvml-dev-10-1 or other version
+%define with_gpu_nvidia 0%{!?_without_gpu_nvidia:0}
+# not sure why this one's failing
+%define with_write_stackdriver 0%{!?_without_write_stackdriver:0}
 
 # Plugins not buildable on RHEL < 6
 %if 0%{?rhel} && 0%{?rhel} < 6
@@ -246,8 +260,8 @@
 
 Summary:	Statistics collection and monitoring daemon
 Name:		collectd
-Version:	5.7.1
-Release:	7%{?dist}
+Version:	5.9.0
+Release:	1%{?dist}
 URL:		https://collectd.org
 Source:		https://collectd.org/files/%{name}-%{version}.tar.bz2
 License:	GPLv2
@@ -276,13 +290,24 @@ every 10 seconds by default.
 
 %if %{with_amqp}
 %package amqp
-Summary:	AMQP plugin for collectd
+Summary:	AMQP 0.9 plugin for collectd
 Group:		System Environment/Daemons
 Requires:	%{name}%{?_isa} = %{version}-%{release}
 BuildRequires:	librabbitmq-devel
 %description amqp
-The AMQP plugin transmits or receives values collected by collectd via the
-Advanced Message Queuing Protocol (AMQP).
+The AMQP 0.9 plugin transmits or receives values collected by collectd via the
+Advanced Message Queuing Protocol v0.9 (AMQP).
+%endif
+
+%if %{with_amqp1}
+%package amqp1
+Summary:	AMQP 1.0 plugin for collectd
+Group:		System Environment/Daemons
+Requires:	%{name}%{?_isa} = %{version}-%{release}
+BuildRequires:	qpid-proton-c-devel
+%description amqp1
+The AMQP 1.0 plugin transmits or receives values collected by collectd via the
+Advanced Message Queuing Protocol v1.0 (AMQP1).
 %endif
 
 %if %{with_apache}
@@ -724,6 +749,16 @@ The Perl plugin embeds a Perl interpreter into collectd and exposes the
 application programming interface (API) to Perl-scripts.
 %endif
 
+%if %{with_pcie_errors}
+%package pcie_errors
+Summary:	PCI Express errors plugin for collectd
+Group:		System Environment/Daemons
+Requires:	%{name}%{?_isa} = %{version}-%{release}
+%description pcie_errors
+The pcie_errors plugin collects PCI Express errors from Device Status in Capability
+structure and from Advanced Error Reporting Extended Capability.
+%endif
+
 %if %{with_pinba}
 %package pinba
 Summary:	Pinba plugin for collectd
@@ -928,6 +963,27 @@ BuildRequires:	riemann-c-client-devel >= 1.6
 The riemann plugin submits values to Riemann, an event stream processor.
 %endif
 
+%if %{with_write_stackdriver}
+%package write_stackdriver
+Summary:	stackdriver plugin for collectd
+Group:		System Environment/Daemons
+Requires:	%{name}%{?_isa} = %{version}-%{release}
+BuildRequires:	curl-devel, yajl-devel, openssl-devel
+%description write_stackdriver
+The write_stackdriver collectd plugin writes metrics to the
+Google Stackdriver Monitoring service.
+%endif
+
+%if %{with_gpu_nvidia}
+%package gpu_nvidia
+Summary:	stackdriver plugin for collectd
+Group:		System Environment/Daemons
+Requires:	%{name}%{?_isa} = %{version}-%{release}
+BuildRequires: cuda-nvml-dev-10-1
+%description gpu_nvidia
+The gpu_nvidia collectd plugin collects NVidia GPU metrics.
+%endif
+
 %if %{with_xencpu}
 %package xencpu
 Summary:	xencpu plugin for collectd
@@ -1012,6 +1068,12 @@ Collectd utilities
 %define _with_amqp --enable-amqp
 %else
 %define _with_amqp --disable-amqp
+%endif
+
+%if %{with_amqp1}
+%define _with_amqp1 --enable-amqp1
+%else
+%define _with_amqp1 --disable-amqp1
 %endif
 
 %if %{with_apache}
@@ -1359,7 +1421,7 @@ Collectd utilities
 %if %{with_mcelog}
 %define _with_mcelog --enable-mcelog
 %else
-%define _with_mbmon --disable-mcelog
+%define _with_mcelog --disable-mcelog
 %endif
 
 %if %{with_md}
@@ -1530,6 +1592,12 @@ Collectd utilities
 %define _with_perl --disable-perl
 %endif
 
+%if %{with_pcie_errors}
+%define _with_pcie_errors --enable-pcie_errors
+%else
+%define _with_pcie_errors --disable-pcie_errors
+%endif
+
 %if %{with_pf}
 %define _with_pf --enable-pf
 %else
@@ -1653,6 +1721,12 @@ Collectd utilities
 %define _with_swap --enable-swap
 %else
 %define _with_swap --disable-swap
+%endif
+
+%if %{with_synproxy}
+%define _with_synproxy --enable-synproxy
+%else
+%define _with_synproxy --disable-synproxy
 %endif
 
 %if %{with_syslog}
@@ -1823,10 +1897,28 @@ Collectd utilities
 %define _with_write_riemann --disable-write_riemann
 %endif
 
+%if %{with_write_stackdriver}
+%define _with_write_stackdriver --enable-write_stackdriver
+%else
+%define _with_write_stackdriver --disable-write_stackdriver
+%endif
+
+%if %{with_gpu_nvidia}
+%define _with_gpu_nvidia --enable-gpu_nvidia
+%else
+%define _with_gpu_nvidia --disable-gpu_nvidia
+%endif
+
 %if %{with_write_sensu}
 %define _with_write_sensu --enable-write_sensu
 %else
 %define _with_write_sensu --disable-write_sensu
+%endif
+
+%if %{with_write_syslog}
+%define _with_write_syslog --enable-write_syslog
+%else
+%define _with_write_syslog --disable-write_syslog
 %endif
 
 %if %{with_write_tsdb}
@@ -1865,8 +1957,15 @@ Collectd utilities
 %define _with_zookeeper --disable-zookeeper
 %endif
 
+%if %{with debug}
+%define _feature_debug --enable-debug
+%else
+%define _feature_debug --disable-debug
+%endif
+
 %configure CFLAGS="%{optflags} -DLT_LAZY_OR_NOW=\"RTLD_LAZY|RTLD_GLOBAL\"" \
 	%{?_python_config} \
+	%{?_feature_debug} \
 	--disable-static \
 	--enable-all-plugins=yes \
 	--enable-match_empty_counter \
@@ -1881,6 +1980,7 @@ Collectd utilities
 	--enable-target_v5upgrade \
 	%{?_with_aggregation} \
 	%{?_with_amqp} \
+	%{?_with_amqp1} \
 	%{?_with_apache} \
 	%{?_with_apcups} \
 	%{?_with_apple_sensors} \
@@ -1966,6 +2066,7 @@ Collectd utilities
 	%{?_with_ovs_events} \
 	%{?_with_ovs_stats} \
 	%{?_with_perl} \
+	%{?_with_pcie_errors} \
 	%{?_with_pf} \
 	%{?_with_pinba} \
 	%{?_with_ping} \
@@ -1986,6 +2087,7 @@ Collectd utilities
 	%{?_with_snmp_agent} \
 	%{?_with_statsd} \
 	%{?_with_swap} \
+	%{?_with_synproxy} \
 	%{?_with_syslog} \
 	%{?_with_table} \
 	%{?_with_tail_csv} \
@@ -2016,7 +2118,10 @@ Collectd utilities
 	%{?_with_write_prometheus} \
 	%{?_with_write_redis} \
 	%{?_with_write_riemann} \
+	%{?_with_write_stackdriver} \
+	%{?_with_gpu_nvidia} \
 	%{?_with_write_sensu} \
+	%{?_with_write_syslog} \
 	%{?_with_write_tsdb} \
 	%{?_with_xencpu} \
 	%{?_with_xmms} \
@@ -2291,6 +2396,9 @@ fi
 %if %{with_swap}
 %{_libdir}/%{name}/swap.so
 %endif
+%if %{with_synproxy}
+%{_libdir}/%{name}/synproxy.so
+%endif
 %if %{with_syslog}
 %{_libdir}/%{name}/syslog.so
 %endif
@@ -2348,6 +2456,9 @@ fi
 %if %{with_write_log}
 %{_libdir}/%{name}/write_log.so
 %endif
+%if %{with_write_syslog}
+%{_libdir}/%{name}/write_syslog.so
+%endif
 %if %{with_write_sensu}
 %{_libdir}/%{name}/write_sensu.so
 %endif
@@ -2367,6 +2478,9 @@ fi
 %{_includedir}/collectd/network_buffer.h
 %{_includedir}/collectd/lcc_features.h
 %{_libdir}/pkgconfig/libcollectdclient.pc
+%{_includedir}/collectd/network_parse.h
+%{_includedir}/collectd/server.h
+%{_includedir}/collectd/types.h
 %{_libdir}/libcollectdclient.so
 
 %files -n libcollectdclient
@@ -2383,6 +2497,11 @@ fi
 %if %{with_amqp}
 %files amqp
 %{_libdir}/%{name}/amqp.so
+%endif
+
+%if %{with_amqp1}
+%files amqp1
+%{_libdir}/%{name}/amqp1.so
 %endif
 
 %if %{with_apache}
@@ -2608,6 +2727,11 @@ fi
 %{_libdir}/%{name}/perl.so
 %endif
 
+%if %{with_pcie_errors}
+%files pcie_errors
+%{_libdir}/%{name}/pcie_errors.so
+%endif
+
 %if %{with_pinba}
 %files pinba
 %{_libdir}/%{name}/pinba.so
@@ -2701,6 +2825,16 @@ fi
 %{_libdir}/%{name}/write_riemann.so
 %endif
 
+%if %{with_write_stackdriver}
+%files write_stackdriver
+%{_libdir}/%{name}/write_stackdriver.so
+%endif
+
+%if %{with_gpu_nvidia}
+%files write_gpu_nvidia
+%{_libdir}/%{name}/write_gpu_nvidia.so
+%endif
+
 %if %{with_xencpu}
 %files xencpu
 %{_libdir}/%{name}/xencpu.so
@@ -2723,6 +2857,20 @@ fi
 %doc contrib/
 
 %changelog
+* Fri Jun 14 2019 Fabien Wernli <rpmbuild@faxmodem.org> - 5.9.0-1
+- add code for write_stackdriver (disabled for now)
+- add code for gpu_nvidia (disabled for now)
+- add pcie_errors
+
+* Thu Sep 28 2017 Jakub Jankowski <shasta@toxcorp.com> - 5.7.1-9
+- Fix mbmon/mcelog build options
+
+* Thu Sep 28 2017 xakru <calvinxakru@gmail.com> - 5.7.1-8
+- Add new libcollectdclient/network_parse
+- Add new libcollectdclient/server
+- Add new libcollectdclient/types
+- Add new synproxy plugin
+
 * Fri Aug 18 2017 Ruben Kerkhof <ruben@rubenkerkhof.com> - 5.7.1-7
 - Add new intel_pmu plugin
 

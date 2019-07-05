@@ -32,12 +32,12 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
 #include "semaphore.h"
 #include "sys/mman.h"
-#include "utils_dpdk.h"
+#include "utils/dpdk/dpdk.h"
 #include "utils_time.h"
 
 #include <rte_config.h>
@@ -66,19 +66,19 @@ typedef struct dpdk_ka_monitor_s {
 
 typedef struct dpdk_link_status_config_s {
   int enabled;
-  _Bool send_updated;
+  bool send_updated;
   uint32_t enabled_port_mask;
   char port_name[RTE_MAX_ETHPORTS][DATA_MAX_NAME_LEN];
-  _Bool notify;
+  bool notify;
 } dpdk_link_status_config_t;
 
 typedef struct dpdk_keep_alive_config_s {
   int enabled;
-  _Bool send_updated;
+  bool send_updated;
   uint128_t lcore_mask;
   dpdk_keepalive_shm_t *shm;
   char shm_name[DATA_MAX_NAME_LEN];
-  _Bool notify;
+  bool notify;
   int fd;
 } dpdk_keep_alive_config_t;
 
@@ -129,12 +129,11 @@ static int dpdk_event_keep_alive_shm_open(void) {
             shm_name);
   }
 
-  char errbuf[ERR_BUF_SIZE];
   int fd = shm_open(shm_name, O_RDONLY, 0);
   if (fd < 0) {
     ERROR(DPDK_EVENTS_PLUGIN ": Failed to open %s as SHM:%s. Is DPDK KA "
                              "primary application running?",
-          shm_name, sstrerror(errno, errbuf, sizeof(errbuf)));
+          shm_name, STRERRNO);
     return errno;
   }
 
@@ -166,8 +165,7 @@ static int dpdk_event_keep_alive_shm_open(void) {
   ec->config.keep_alive.shm = (dpdk_keepalive_shm_t *)mmap(
       0, sizeof(*(ec->config.keep_alive.shm)), PROT_READ, MAP_SHARED, fd, 0);
   if (ec->config.keep_alive.shm == MAP_FAILED) {
-    ERROR(DPDK_EVENTS_PLUGIN ": Failed to mmap KA SHM:%s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR(DPDK_EVENTS_PLUGIN ": Failed to mmap KA SHM:%s", STRERRNO);
     close(fd);
     return errno;
   }
@@ -187,8 +185,8 @@ static void dpdk_events_default_config(void) {
   /* Link Status */
   ec->config.link_status.enabled = 1;
   ec->config.link_status.enabled_port_mask = ~0;
-  ec->config.link_status.send_updated = 1;
-  ec->config.link_status.notify = 0;
+  ec->config.link_status.send_updated = true;
+  ec->config.link_status.notify = false;
 
   for (int i = 0; i < RTE_MAX_ETHPORTS; i++) {
     ec->config.link_status.port_name[i][0] = 0;
@@ -196,8 +194,8 @@ static void dpdk_events_default_config(void) {
 
   /* Keep Alive */
   ec->config.keep_alive.enabled = 1;
-  ec->config.keep_alive.send_updated = 1;
-  ec->config.keep_alive.notify = 0;
+  ec->config.keep_alive.send_updated = true;
+  ec->config.keep_alive.notify = false;
   /* by default enable 128 cores */
   memset(&ec->config.keep_alive.lcore_mask, 1,
          sizeof(ec->config.keep_alive.lcore_mask));
@@ -421,8 +419,12 @@ static int dpdk_events_config(oconfig_item_t *ci) {
 static int dpdk_helper_link_status_get(dpdk_helper_ctx_t *phc) {
   dpdk_events_ctx_t *ec = DPDK_EVENTS_CTX_GET(phc);
 
-  /* get Link Status values from DPDK */
+/* get Link Status values from DPDK */
+#if RTE_VERSION < RTE_VERSION_NUM(18, 05, 0, 0)
   uint8_t nb_ports = rte_eth_dev_count();
+#else
+  uint8_t nb_ports = rte_eth_dev_count_avail();
+#endif
   if (nb_ports == 0) {
     DPDK_CHILD_LOG("dpdkevent-helper: No DPDK ports available. "
                    "Check bound devices to DPDK driver.\n");
@@ -430,7 +432,7 @@ static int dpdk_helper_link_status_get(dpdk_helper_ctx_t *phc) {
   }
   ec->nb_ports = nb_ports > RTE_MAX_ETHPORTS ? RTE_MAX_ETHPORTS : nb_ports;
 
-  for (int i = 0; i < ec->nb_ports; i++) {
+  for (unsigned int i = 0; i < ec->nb_ports; i++) {
     if (ec->config.link_status.enabled_port_mask & (1 << i)) {
       struct rte_eth_link link;
       ec->link_info[i].read_time = cdtime();
@@ -499,7 +501,7 @@ static int dpdk_events_link_status_dispatch(dpdk_helper_ctx_t *phc) {
         ec->nb_ports);
 
   /* dispatch Link Status values to collectd */
-  for (int i = 0; i < ec->nb_ports; i++) {
+  for (unsigned int i = 0; i < ec->nb_ports; i++) {
     if (ec->config.link_status.enabled_port_mask & (1 << i)) {
       if (!ec->config.link_status.send_updated ||
           ec->link_info[i].status_updated) {
