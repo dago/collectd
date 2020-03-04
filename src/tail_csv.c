@@ -261,14 +261,14 @@ static void tcsv_metric_definition_destroy(void *arg) {
 
 static int tcsv_config_get_index(oconfig_item_t *ci, ssize_t *ret_index) {
   if ((ci->values_num != 1) || (ci->values[0].type != OCONFIG_TYPE_NUMBER)) {
-    WARNING("tail_csv plugin: The \"%s\" config option needs exactly one "
+    ERROR("tail_csv plugin: The \"%s\" config option needs exactly one "
             "integer argument.",
             ci->key);
     return -1;
   }
 
   if (ci->values[0].value.number < 0) {
-    WARNING("tail_csv plugin: The \"%s\" config option must be positive "
+    ERROR("tail_csv plugin: The \"%s\" config option must be positive "
             "(or zero).",
             ci->key);
     return -1;
@@ -282,7 +282,7 @@ static int tcsv_config_get_separator(oconfig_item_t *ci, char *ret_char) {
   size_t len_opt;
 
   if ((ci->values_num != 1) || (ci->values[0].type != OCONFIG_TYPE_STRING)) {
-    WARNING("tail_csv plugin: The \"%s\" config option needs exactly one "
+    ERROR("tail_csv plugin: The \"%s\" config option needs exactly one "
             "string argument.",
             ci->key);
     return -1;
@@ -290,7 +290,7 @@ static int tcsv_config_get_separator(oconfig_item_t *ci, char *ret_char) {
 
   len_opt = strlen(ci->values[0].value.string);
   if (len_opt != 1) {
-    WARNING("tail_csv plugin: The \"%s\" config option must be a "
+    ERROR("tail_csv plugin: The \"%s\" config option must be a "
             "single character",
             ci->key);
     return -1;
@@ -395,7 +395,7 @@ static int tcsv_config_add_instance_collect(instance_definition_t *id,
   size_t metric_list_size;
 
   if (ci->values_num < 1) {
-    WARNING("tail_csv plugin: The `Collect' config option needs at least one "
+    ERROR("tail_csv plugin: The `Collect' config option needs at least one "
             "argument.");
     return -1;
   }
